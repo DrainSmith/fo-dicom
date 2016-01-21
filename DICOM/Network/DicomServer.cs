@@ -1,147 +1,227 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Net;
-using System.Net.Sockets;
-using System.Net.Security;
-using System.Security.Authentication;
-using System.Security.Cryptography.X509Certificates;
-using System.Threading;
-
-using Dicom.Log;
+﻿// Copyright (c) 2012-2015 fo-dicom contributors.
+// Licensed under the Microsoft Public License (MS-PL).
 
 namespace Dicom.Network
 {
-    public class DicomServer<T> : IDisposable where T : DicomService, IDicomServiceProvider
+    using System;
+    using System.Collections.Generic;
+    using System.IO;
+    using System.Threading;
+    using System.Threading.Tasks;
+
+    using Dicom.Log;
+
+    /// <summary>
+    /// DICOM server class.
+    /// </summary>
+    /// <typeparam name="T">DICOM service that the server should manage.</typeparam>
+    public class DicomServer<T> : IDisposable
+        where T : DicomService, IDicomServiceProvider
     {
-        private X509Certificate _cert;
-        private TcpListener _listener;
-        private List<T> _clients;
-        private Timer _timer;
-        private object _synchRoot = new object();
+        #region FIELDS
 
-        public DicomServer(int port, string certificateName = null)
+        private bool disposed;
+
+        private readonly int port;
+
+        private readonly string certificateName;
+
+        private readonly CancellationTokenSource cancellationSource;
+
+        private readonly List<T> clients;
+
+        #endregion
+
+        #region CONSTRUCTORS
+
+        /// <summary>
+        /// Initializes an instance of <see cref="DicomServer{T}"/>, that starts listening for connections in the background.
+        /// </summary>
+        /// <param name="port">Port to listen to.</param>
+        /// <param name="certificateName">Certificate name for authenticated connections.</param>
+        /// <param name="options">Service options.</param>
+        /// <param name="logger">Logger.</param>
+        public DicomServer(int port, string certificateName = null, DicomServiceOptions options = null, Logger logger = null)
         {
-            _clients = new List<T>();
+            this.port = port;
+            this.certificateName = certificateName;
+            this.cancellationSource = new CancellationTokenSource();
+            this.clients = new List<T>();
 
-            if (certificateName != null)
-            {
-                var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
-                store.Open(OpenFlags.ReadOnly);
+            this.Options = options;
+            this.Logger = logger ?? LogManager.GetLogger("Dicom.Network");
+            this.IsListening = false;
+            this.Exception = null;
 
-                var certs = store.Certificates.Find(X509FindType.FindBySubjectName, certificateName, false);
+            Task.Factory.StartNew(
+                this.OnTimerTickAsync,
+                this.cancellationSource.Token,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
 
-                if (certs.Count == 0)
-                    throw new DicomNetworkException("Unable to find certificate for " + certificateName);
+            Task.Factory.StartNew(
+                this.ListenAsync,
+                this.cancellationSource.Token,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
 
-                _cert = certs[0];
-
-                store.Close();
-            }
-
-            _listener = new TcpListener(IPAddress.Any, port);
-            _listener.Start();
-            _listener.BeginAcceptTcpClient(OnAcceptTcpClient, null);
-
-            _timer = new Timer(OnTimerTick, false, 1000, 1000);
+            this.disposed = false;
         }
 
-        public Logger Logger
+        #endregion
+
+        #region PROPERTIES
+
+        /// <summary>
+        /// Gets the logger used by <see cref="DicomServer{T}"/>
+        /// </summary>
+        public Logger Logger { get; private set; }
+
+        /// <summary>
+        /// Gets the options to control behavior of <see cref="DicomService"/> base class.
+        /// </summary>
+        public DicomServiceOptions Options { get; private set; }
+
+        /// <summary>
+        /// Gets a value indicating whether the server is actively listening for client connections.
+        /// </summary>
+        public bool IsListening { get; private set; }
+
+        /// <summary>
+        /// Gets the exception that was thrown if the server failed to listen.
+        /// </summary>
+        public Exception Exception { get; private set; }
+
+        #endregion
+
+        #region METHODS
+
+        /// <summary>
+        /// Stop server from further listening.
+        /// </summary>
+        public void Stop()
         {
-            get;
-            set;
+            if (!this.cancellationSource.IsCancellationRequested)
+            {
+                this.cancellationSource.Cancel();
+            }
         }
 
         /// <summary>
-        /// Options to control behavior of <see cref="DicomService"/> base class.
+        /// Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
         /// </summary>
-        public DicomServiceOptions Options
+        public void Dispose()
         {
-            get;
-            set;
+            this.Dispose(true);
         }
 
-        private void OnAcceptTcpClient(IAsyncResult result)
+        /// <summary>
+        /// Execute the disposal.
+        /// </summary>
+        /// <param name="disposing">True if called from <see cref="Dispose"/>, false otherwise.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (this.disposed)
+            {
+                return;
+            }
+
+            if (disposing)
+            {
+                this.Stop();
+                this.cancellationSource.Dispose();
+                this.clients.Clear();
+            }
+
+            this.disposed = true;
+        }
+
+        /// <summary>
+        /// Create an instance of the DICOM service class.
+        /// </summary>
+        /// <param name="stream">Network stream.</param>
+        /// <returns>An instance of the DICOM service class.</returns>
+        protected virtual T CreateScp(Stream stream)
+        {
+            return (T)Activator.CreateInstance(typeof(T), stream, this.Logger);
+        }
+
+        /// <summary>
+        /// Listen indefinitely for network connections on the specified port.
+        /// </summary>
+        private async void ListenAsync()
         {
             try
             {
+                var noDelay = this.Options != null ? this.Options.TcpNoDelay : DicomServiceOptions.Default.TcpNoDelay;
 
-                TcpClient client = null;
-                lock (_synchRoot)
+                var listener = NetworkManager.CreateNetworkListener(this.port);
+                await listener.StartAsync().ConfigureAwait(false);
+                this.IsListening = true;
+
+                while (!this.cancellationSource.IsCancellationRequested)
                 {
-                    if (_listener == null)
+                    var networkStream =
+                        await
+                        listener.AcceptNetworkStreamAsync(this.certificateName, noDelay, this.cancellationSource.Token)
+                            .ConfigureAwait(false);
+
+                    if (networkStream != null)
                     {
-                    return;
+                        var scp = this.CreateScp(networkStream.AsStream());
+                        if (this.Options != null)
+                        {
+                            scp.Options = this.Options;
+                        }
+
+                        this.clients.Add(scp);
                     }
-                    client = _listener.EndAcceptTcpClient(result);
                 }
 
+                listener.Stop();
+                this.IsListening = false;
+                this.Exception = null;
+            }
+            catch (OperationCanceledException)
+            {
+                this.Logger.Info("Listening manually terminated");
 
-
-                if (Options != null)
-                    client.NoDelay = Options.TcpNoDelay;
-                else
-                    client.NoDelay = DicomServiceOptions.Default.TcpNoDelay;
-
-                Stream stream = client.GetStream();
-
-                if (_cert != null)
-                {
-                    var ssl = new SslStream(stream, false);
-                    ssl.AuthenticateAsServer(_cert, false, SslProtocols.Tls, false);
-
-                    stream = ssl;
-                }
-
-                T scp = CreateScp(stream);
-
-                if (Options != null)
-                    scp.Options = Options;
-
-                _clients.Add(scp);
+                this.IsListening = false;
+                this.Exception = null;
             }
             catch (Exception e)
             {
-                if (Logger == null)
-                    Logger = LogManager.Default.GetLogger("Dicom.Network");
-                Logger.Error("Exception accepting client: " + e.ToString());
-            }
-            finally
-            {
-                lock (_synchRoot)
-                {
-                    if (_listener != null)
-                    _listener.BeginAcceptTcpClient(OnAcceptTcpClient, null);
+                this.Logger.Error("Exception listening for clients, {@error}", e);
 
+                this.Stop();
+                this.IsListening = false;
+                this.Exception = e;
+            }
+        }
+
+        /// <summary>
+        /// Remove no longer used client connections.
+        /// </summary>
+        private async void OnTimerTickAsync()
+        {
+            while (!this.cancellationSource.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(1000, this.cancellationSource.Token).ConfigureAwait(false);
+                    this.clients.RemoveAll(client => !client.IsConnected);
+                }
+                catch (OperationCanceledException)
+                {
+                    this.Logger.Info("Disconnected client cleanup manually terminated.");
+                }
+                catch (Exception e)
+                {
+                    this.Logger.Warn("Exception removing disconnected clients, {@error}", e);
                 }
             }
         }
 
-        private void OnTimerTick(object state)
-        {
-            try
-            {
-                for (int i = 0; i < _clients.Count; i++)
-                    if (!_clients[i].IsConnected)
-                        _clients.RemoveAt(i--);
-            }
-            catch
-            {
-            }
-        }
-
-        public void Dispose()
-        {
-            lock (_synchRoot)
-            {
-            _listener.Stop();
-            _listener = null;
-            }
-        }
-
-        protected virtual T CreateScp(Stream stream)
-        {
-            return (T)Activator.CreateInstance(typeof(T), stream, Logger);
-        }
+        #endregion
     }
 }

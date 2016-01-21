@@ -1,21 +1,50 @@
-# Fellow Oak DICOM for .NET
+<img src="https://lh3.googleusercontent.com/-Fq3nigRUo7U/VfaIPuJMjfI/AAAAAAAAALo/7oaLrrTBhnw/s1600/Fellow%2BOak%2BSquare%2BTransp.png" alt="fo-dicom logo" height="80" />
 
-Please join the [Google group](http://groups.google.com/group/fo-dicom) for updates and support. Binaries are available from [GitHub](https://github.com/rcd/fo-dicom/releases) and [NuGet](http://www.nuget.org/packages/fo-dicom).
+# Fellow Oak DICOM
+
+[//]: # ( [![NuGet Pre Release](https://img.shields.io/nuget/vpre/fo-dicom.svg)](https://www.nuget.org/packages/fo-dicom/) )
+[![NuGet](https://img.shields.io/nuget/v/fo-dicom.svg)](https://www.nuget.org/packages/fo-dicom/)
+[![Build status](https://ci.appveyor.com/api/projects/status/r3yptmhufh3dl1xc?svg=true)](https://ci.appveyor.com/project/anders9ustafsson/fo-dicom)
+[![Stories in Ready](https://badge.waffle.io/fo-dicom/fo-dicom.svg?label=ready&title=Ready)](http://waffle.io/fo-dicom/fo-dicom)
+[![Join the chat at https://gitter.im/fo-dicom/fo-dicom](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/fo-dicom/fo-dicom?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 ### Features
-* High-performance, fully asynchronous, .NET 4.0 API
-* JPEG (including lossless), JPEG-LS, JPEG2000, and RLE image compression
+* Core functionality in Portable Class Library (PCL)
+* Targets .NET 4.5 and higher, Universal Windows Platform, Xamarin iOS, Xamarin Android, and Mono
+* DICOM dictionary version 2015c
+* High-performance, fully asynchronous `async`/`await` API
+* (.NET and UWP only) JPEG (including lossless), JPEG-LS, JPEG2000, and RLE image compression
 * Supports very large datasets with content loading on demand
 * Image rendering
 
-### Notes
-* Support for compressed images requires the Visual Studio 2010 SP1 Redistributable Package to be installed. ([x86](http://www.microsoft.com/en-us/download/details.aspx?id=8328) or [x64](http://www.microsoft.com/en-us/download/details.aspx?id=14632)) 
+### Installation
+Easiest is to obtain *fo-dicom* binaries from [NuGet](https://www.nuget.org/packages/fo-dicom/). This package contains all assemblies required to consume *fo-dicom* in a .NET application.
+
+Starting with *fo-dicom* version 2.0, there will also be separate *NuGet* packages available for [Dicom.Core](https://www.nuget.org/packages/fo-dicom.Core/), [Dicom.Legacy](https://www.nuget.org/packages/fo-dicom.Legacy/) and 
+[Dicom.Platform](https://www.nuget.org/packages/fo-dicom.Platform/). *Dicom.Core* is the PCL library with core functionality, *Dicom.Legacy* is a PCL library with obsolete asynchronous API methods, and *Dicom.Platform* contains
+the support libraries required to run *fo-dicom* on specific target platforms. As of now, .NET 4.5 and higher, *Universal Windows Platform*, *Xamarin iOS* and *Xamarin Android* are the available platforms in the *Dicom.Platform* *NuGet* package.
+
+*fo-dicom* can use a wide variety of logging frameworks. These connectors come in separate *NuGet* packages for [NLog](https://www.nuget.org/packages/fo-dicom.NLog/), [Serilog](https://www.nuget.org/packages/fo-dicom.Serilog/), 
+[log4net](https://www.nuget.org/packages/fo-dicom.log4net/) and [MetroLog](https://www.nuget.org/packages/fo-dicom.MetroLog/). The *MetroLog* connector is a Portable Class Library, whereas the other logging connectors are .NET dedicated libraries.
+
+### v2.0 Breaking Changes
+Out-of-the-box, *fo-dicom* for .NET defaults to *Windows Forms*-style image rendering. To switch to WPF-style image rendering, call:
+
+    ImageManager.SetImplementation(WPFImageManager.Instance);
+
+By default, logging defaults to the no-op `NullLogerManager`. On .NET, several log managers are available and can be enabled like this:
+
+    LogManager.SetImplementation(ConsoleLogManager.Instance);  // or ...
+    LogManager.SetImplementation(NLogManager.Instance);        // or ...
+
+On *Universal Windows Platform*, *Xamarin iOS*, *Xamarin Android* and *Mono* there is only one operational log manager available, namely `MetroLogManager.Instance`.
 
 ### Examples
 
 #### File Operations
 ```csharp
-var file = DicomFile.Open(@"test.dcm");
+var file = DicomFile.Open(@"test.dcm");             // Alt 1
+var file = await DicomFile.OpenAsync(@"test.dcm");  // Alt 2
 
 var patientid = file.Dataset.Get<string>(DicomTag.PatientID);
 
@@ -24,20 +53,24 @@ file.Dataset.Add(DicomTag.PatientsName, "DOE^JOHN");
 // creates a new instance of DicomFile
 file = file.ChangeTransferSyntax(DicomTransferSyntax.JPEGProcess14SV1);
 
-file.Save(@"output.dcm");
+file.Save(@"output.dcm");             // Alt 1
+await file.SaveAsync(@"output.dcm");  // Alt 2
 ```
 
 #### Render Image to JPEG
 ```csharp
 var image = new DicomImage(@"test.dcm");
-image.RenderImage().Save(@"test.jpg");
+image.RenderImage().AsBitmap().Save(@"test.jpg");                     // Windows Forms
+image.RenderImage().AsUIImage().AsJPEG().Save(@"test.jpg", true);     // iOS
+
 ```
 
 #### C-Store SCU
 ```csharp
 var client = new DicomClient();
 client.AddRequest(new DicomCStoreRequest(@"test.dcm"));
-client.Send("127.0.0.1", 12345, false, "SCU", "ANY-SCP");
+client.Send("127.0.0.1", 12345, false, "SCU", "ANY-SCP");             // Alt 1
+await client.SendAsync("127.0.0.1", 12345, false, "SCU", "ANY-SCP");  // Alt 2
 ```
 
 #### C-Echo SCU/SCP
@@ -48,7 +81,8 @@ var client = new DicomClient();
 client.NegotiateAsyncOps();
 for (int i = 0; i < 10; i++)
     client.AddRequest(new DicomCEchoRequest());
-client.Send("127.0.0.1", 12345, false, "SCU", "ANY-SCP");
+client.Send("127.0.0.1", 12345, false, "SCU", "ANY-SCP");             // Alt 1
+await client.SendAsync("127.0.0.1", 12345, false, "SCU", "ANY-SCP");  // Alt 2
 ```
 
 #### C-Find SCU
@@ -60,7 +94,8 @@ cfind.OnResponseReceived = (DicomCFindRequest rq, DicomCFindResponse rp) => {
 
 var client = new DicomClient();
 client.AddRequest(cfind);
-client.Send("127.0.0.1", 104, false, "SCU-AE", "SCP-AE");
+client.Send("127.0.0.1", 104, false, "SCU-AE", "SCP-AE");             // Alt 1
+await client.SendAsync("127.0.0.1", 104, false, "SCU-AE", "SCP-AE");  // Alt 2
 ```
 
 #### C-Move SCU
@@ -69,16 +104,26 @@ var cmove = new DicomCMoveRequest("DEST-AE", studyInstanceUid);
 
 var client = new DicomClient();
 client.AddRequest(cmove);
-client.Send("127.0.0.1", 104, false, "SCU-AE", "SCP-AE");
+client.Send("127.0.0.1", 104, false, "SCU-AE", "SCP-AE");             // Alt 1
+await client.SendAsync("127.0.0.1", 104, false, "SCU-AE", "SCP-AE");  // Alt 2
 ```
 
 ### Contributors
-* [Hesham Desouky](https://github.com/hdesouky) (Nebras Technology)
-* [Mahesh Dubey](https://github.com/mdubey82)
-* [Anders Gustafsson](https://github.com/cureos) (Cureos AB)
-* [Justin Wake](https://github.com/jwake)
+* [Colby Dillion](https://github.com/rcd)
+* [Anders Gustafsson](https://github.com/anders9ustafsson), Cureos AB
+* [Ian Yates](http://github.com/IanYates)
+* [Hesham Desouky](https://github.com/hdesouky), Nebras Technology
 * [Chris Horn](https://github.com/GMZ)
+* [Mahesh Dubey](https://github.com/mdubey82)
+* [Alexander Saratow](https://github.com/swalex)
+* [Justin Wake](https://github.com/jwake)
+* [Ryan Melena](https://github.com/RyanMelenaNoesis)
+* [Chris Hafey](https://github.com/chafey)
+* [Michael Pavlovsky](https://github.com/michaelp)
 * [captainstark](https://github.com/captainstark)
+* [lste](https://github.com/lste)
+* [0xLigety](https://github.com/0xLigety)
+* [Thunderstriker](https://github.com/Thunderstriker)
 
 ### License
-This library is licensed under the [Microsoft Public License (MS-PL)](http://opensource.org/licenses/MS-PL). See _License.txt_ for more information.
+This library is licensed under the [Microsoft Public License (MS-PL)](http://opensource.org/licenses/MS-PL). See [License.txt](License.txt) for more information.

@@ -1,32 +1,73 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+﻿// Copyright (c) 2012-2015 fo-dicom contributors.
+// Licensed under the Microsoft Public License (MS-PL).
 
-using Dicom.IO;
+namespace Dicom.IO.Reader
+{
+    using System;
+    using System.Threading.Tasks;
 
-namespace Dicom.IO.Reader {
-	public enum DicomReaderResult {
-		Processing,
-		Success,
-		Error,
-		Stopped,
-		Suspended
-	}
+    /// <summary>
+    /// Possible DICOM reader results.
+    /// </summary>
+    public enum DicomReaderResult
+    {
+        /// <summary>
+        /// Reader is processing.
+        /// </summary>
+        Processing,
 
-	public interface IDicomReader {
-		bool IsExplicitVR {
-			get;
-			set;
-		}
+        /// <summary>
+        /// Reader completed successfully.
+        /// </summary>
+        Success,
 
-		DicomReaderResult Status {
-			get;
-		}
+        /// <summary>
+        /// Reader completed with error.
+        /// </summary>
+        Error,
 
-		DicomReaderResult Read(IByteSource source, IDicomReaderObserver observer, DicomTag stop=null);
+        /// <summary>
+        /// Reader was stopped at specific tag.
+        /// </summary>
+        Stopped,
 
-		IAsyncResult BeginRead(IByteSource source, IDicomReaderObserver observer, DicomTag stop, AsyncCallback callback, object state);
-		DicomReaderResult EndRead(IAsyncResult result);
-	}
+        /// <summary>
+        /// Reader was suspended.
+        /// </summary>
+        Suspended
+    }
+
+    /// <summary>
+    /// Interface representing a DICOM reader.
+    /// </summary>
+    public interface IDicomReader
+    {
+        /// <summary>
+        /// Gets or sets whether value representation is explicit or not.
+        /// </summary>
+        bool IsExplicitVR { get; set; }
+
+        /// <summary>
+        /// Gets or sets the DICOM dictionary to be used by the reader.
+        /// </summary>
+        DicomDictionary Dictionary { get; set; }
+
+        /// <summary>
+        /// Perform DICOM reading of a byte source.
+        /// </summary>
+        /// <param name="source">Byte source to read.</param>
+        /// <param name="observer">Reader observer.</param>
+        /// <param name="stop">Criterion at which to stop.</param>
+        /// <returns>Reader resulting status.</returns>
+        DicomReaderResult Read(IByteSource source, IDicomReaderObserver observer, Func<ParseState, bool> stop = null);
+
+        /// <summary>
+        /// Asynchronously perform DICOM reading of a byte source.
+        /// </summary>
+        /// <param name="source">Byte source to read.</param>
+        /// <param name="observer">Reader observer.</param>
+        /// <param name="stop">Criterion at which to stop.</param>
+        /// <returns>Awaitable reader resulting status.</returns>
+        Task<DicomReaderResult> ReadAsync(IByteSource source, IDicomReaderObserver observer, Func<ParseState, bool> stop = null);
+    }
 }
